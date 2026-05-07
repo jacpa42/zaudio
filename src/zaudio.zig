@@ -5,6 +5,7 @@ const assert = std.debug.assert;
 // Misc
 //
 //--------------------------------------------------------------------------------------------------
+/// NOTE: Allocator must be thread safe!
 pub fn init(allocator: std.mem.Allocator) void {
     assert(mem_allocator == null);
     mem_allocator = allocator;
@@ -3157,29 +3158,13 @@ pub const Fence = opaque {
 //--------------------------------------------------------------------------------------------------
 var mem_allocator: ?std.mem.Allocator = null;
 var mem_allocations: ?std.AutoHashMap(usize, usize) = null;
-var mem_mutex: std.Thread.Mutex = .{};
-const mem_alignment = 16;
+const mem_align = std.mem.Alignment.@"16";
 
 extern var zaudioMallocPtr: ?*const fn (size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque;
 
 fn zaudioMalloc(size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
-    mem_mutex.lock();
-    defer mem_mutex.unlock();
-
-    const zig_version = @import("builtin").zig_version;
-
-    const alignment = comptime if (zig_version.minor == 14)
-        mem_alignment
-    else
-        std.mem.Alignment.fromByteUnits(mem_alignment);
-
-    const mem = mem_allocator.?.alignedAlloc(
-        u8,
-        alignment,
-        size,
-    ) catch @panic("zaudio: out of memory");
-
-    mem_allocations.?.put(@intFromPtr(mem.ptr), size) catch @panic("zaudio: out of memory");
+    const mem = mem_allocator.?.alignedAlloc(u8, mem_align, size) catch @panic("zaudio oom");
+    mem_allocations.?.put(@intFromPtr(mem.ptr), size) catch @panic("zaudio oom");
 
     return mem.ptr;
 }
@@ -3187,14 +3172,11 @@ fn zaudioMalloc(size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
 extern var zaudioReallocPtr: ?*const fn (ptr: ?*anyopaque, size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque;
 
 fn zaudioRealloc(ptr: ?*anyopaque, size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
-    mem_mutex.lock();
-    defer mem_mutex.unlock();
-
     const old_size = if (ptr != null) mem_allocations.?.get(@intFromPtr(ptr.?)).? else 0;
     const old_mem = if (old_size > 0)
-        @as([*]align(mem_alignment) u8, @ptrCast(@alignCast(ptr)))[0..old_size]
+        @as([*]align(@intFromEnum(mem_align)) u8, @ptrCast(@alignCast(ptr)))[0..old_size]
     else
-        @as([*]align(mem_alignment) u8, undefined)[0..0];
+        @as([*]align(@intFromEnum(mem_align)) u8, undefined)[0..0];
 
     const new_mem = mem_allocator.?.realloc(old_mem, size) catch @panic("zaudio: out of memory");
 
@@ -3212,11 +3194,8 @@ extern var zaudioFreePtr: ?*const fn (maybe_ptr: ?*anyopaque, _: ?*anyopaque) ca
 
 fn zaudioFree(maybe_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
     if (maybe_ptr) |ptr| {
-        mem_mutex.lock();
-        defer mem_mutex.unlock();
-
         const size = mem_allocations.?.fetchRemove(@intFromPtr(ptr)).?.value;
-        const mem = @as([*]align(mem_alignment) u8, @ptrCast(@alignCast(ptr)))[0..size];
+        const mem = @as([*]align(@intFromEnum(mem_align)) u8, @ptrCast(@alignCast(ptr)))[0..size];
         mem_allocator.?.free(mem);
     }
 }
@@ -3317,7 +3296,7 @@ test "zaudio.soundgroup.basic" {
 }
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }
 
 test "zaudio.fence.basic" {
@@ -3416,6 +3395,7 @@ test "zaudio.node_graph.basic" {
 }
 
 test "zaudio.audio_buffer" {
+    const io = std.testing.io;
     init(std.testing.allocator);
     defer deinit();
 
@@ -3452,7 +3432,7 @@ test "zaudio.audio_buffer" {
     sound.setLooping(true);
     try sound.start();
 
-    std.Thread.sleep(1e8);
+    try io.sleep(.fromMilliseconds(100), .cpu_thread);
 }
 
 test "zaudio.data_converter" {
