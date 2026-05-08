@@ -3158,12 +3158,12 @@ pub const Fence = opaque {
 //--------------------------------------------------------------------------------------------------
 var mem_allocator: ?std.mem.Allocator = null;
 var mem_allocations: ?std.AutoHashMap(usize, usize) = null;
-const mem_align = std.mem.Alignment.@"16";
+const mem_align = 16;
 
 extern var zaudioMallocPtr: ?*const fn (size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque;
 
 fn zaudioMalloc(size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
-    const mem = mem_allocator.?.alignedAlloc(u8, mem_align, size) catch @panic("zaudio oom");
+    const mem = mem_allocator.?.alignedAlloc(u8, .fromByteUnits(mem_align), size) catch @panic("zaudio oom");
     mem_allocations.?.put(@intFromPtr(mem.ptr), size) catch @panic("zaudio oom");
 
     return mem.ptr;
@@ -3174,9 +3174,9 @@ extern var zaudioReallocPtr: ?*const fn (ptr: ?*anyopaque, size: usize, _: ?*any
 fn zaudioRealloc(ptr: ?*anyopaque, size: usize, _: ?*anyopaque) callconv(.c) ?*anyopaque {
     const old_size = if (ptr != null) mem_allocations.?.get(@intFromPtr(ptr.?)).? else 0;
     const old_mem = if (old_size > 0)
-        @as([*]align(@intFromEnum(mem_align)) u8, @ptrCast(@alignCast(ptr)))[0..old_size]
+        @as([*]align(mem_align) u8, @ptrCast(@alignCast(ptr)))[0..old_size]
     else
-        @as([*]align(@intFromEnum(mem_align)) u8, undefined)[0..0];
+        @as([*]align(mem_align) u8, undefined)[0..0];
 
     const new_mem = mem_allocator.?.realloc(old_mem, size) catch @panic("zaudio: out of memory");
 
@@ -3195,7 +3195,7 @@ extern var zaudioFreePtr: ?*const fn (maybe_ptr: ?*anyopaque, _: ?*anyopaque) ca
 fn zaudioFree(maybe_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
     if (maybe_ptr) |ptr| {
         const size = mem_allocations.?.fetchRemove(@intFromPtr(ptr)).?.value;
-        const mem = @as([*]align(@intFromEnum(mem_align)) u8, @ptrCast(@alignCast(ptr)))[0..size];
+        const mem = @as([*]align(mem_align) u8, @ptrCast(@alignCast(ptr)))[0..size];
         mem_allocator.?.free(mem);
     }
 }
